@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="no-referrer-when-downgrade">
+  <title>AI Code Review Dashboard</title>
+  
+  <!-- React 및 핸들러 CDN -->
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  
+  <!-- 스타일링 -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- 아이콘 -->
+  <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.js"></script>
+  
+  <style>
+    .animate-spin {
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script type="text/babel">
+    const { useState, useEffect, useCallback } = React;
+    
+    // Lucide 아이콘 정의 체크
+    console.log('Lucide available:', typeof lucide !== 'undefined');
+    
+    // Fallback 아이콘 컴포넌트
+    const FallbackIcon = ({ className, children }) => (
+      <span className={className} style={{ display: 'inline-block', width: '1em', height: '1em' }}>
+        {children || '⚙'}
+      </span>
+    );
+    
+    const { 
+      Search = (props) => <FallbackIcon {...props}>🔍</FallbackIcon>,
+      GitPullRequest = (props) => <FallbackIcon {...props}>🔄</FallbackIcon>,
+      CheckCircle = (props) => <FallbackIcon {...props}>✓</FallbackIcon>,
+      AlertCircle = (props) => <FallbackIcon {...props}>⚠</FallbackIcon>,
+      Clock = (props) => <FallbackIcon {...props}>⏰</FallbackIcon>,
+      Settings = (props) => <FallbackIcon {...props}>⚙</FallbackIcon>,
+      BarChart3 = (props) => <FallbackIcon {...props}>📊</FallbackIcon>,
+      FileText = (props) => <FallbackIcon {...props}>📄</FallbackIcon>,
+      Shield = (props) => <FallbackIcon {...props}>🛑</FallbackIcon>,
+      Zap = (props) => <FallbackIcon {...props}>⚡</FallbackIcon>,
+      Code = (props) => <FallbackIcon {...props}>💻</FallbackIcon>,
+      RefreshCw = (props) => <FallbackIcon {...props}>🔄</FallbackIcon>,
+      Eye = (props) => <FallbackIcon {...props}>👁</FallbackIcon>
+    } = lucide || {};
+
+    // API 클라이언트
+    const baseURL = window.location.origin;
+
+    const apiClient = {
+      async analyzePR(prData) {
+        const response = await fetch(`${baseURL}/analyze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(prData),
+        });
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        return await response.json();
+      },
+
+      async generateReviewGuide(commitType, fileChanges = []) {
+        const response = await fetch(`${baseURL}/review-guide`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ commit_type: commitType, file_changes: fileChanges }),
+        });
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        return await response.json();
+      },
+
+      async checkHealth() {
+        const response = await fetch(`${baseURL}/health`);
+        return await response.json();
+      }
+    };
+
+    // Hooks
+    function useAIReview() {
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState(null);
+      const [data, setData] = useState(null);
+
+      const analyzePR = useCallback(async (prData) => {
+        setLoading(true);
+        setError(null);
+        try {
+          const result = await apiClient.analyzePR(prData);
+          setData(result);
+          return result;
+        } catch (err) {
+          setError(err.message);
+          throw err;
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+
+      return { analyzePR, loading, error, data, clearError: () => setError(null) };
+    }
+
+    function useReviewGuide() {
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState(null);
+      const [data, setData] = useState(null);
+
+      const generateReviewGuide = useCallback(async (commitType, fileChanges) => {
+        setLoading(true);
+        setError(null);
+        try {
+          const result = await apiClient.generateReviewGuide(commitType, fileChanges);
+          setData(result);
+          return result;
+        } catch (err) {
+          setError(err.message);
+          throw err;
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+
+      return { generateReviewGuide, loading, error, data };
+    }
+
+    function useHealthCheck() {
+      const [loading, setLoading] = useState(false);
+      const [status, setStatus] = useState('unknown');
+
+      const checkHealth = useCallback(async () => {
+        setLoading(true);
+        try {
+          const data = await apiClient.checkHealth();
+          setStatus(data.status === 'ok' ? 'healthy' : 'unhealthy');
+          return data;
+        } catch (error) {
+          setStatus('unhealthy');
+          return { status: 'error', error: error.message };
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+
+      return { checkHealth, loading, status };
+    }
+
+    // Components
+    function CommitTypeSelector({ value, onChange }) {
+      const commitTypes = [
+        { value: 'feat', label: '✨ Feature', color: 'bg-green-100 text-green-800' },
+        { value: 'fix', label: '🐛 Bug Fix', color: 'bg-red-100 text-red-800' },
+        { value: 'refactor', label: '♻️ Refactor', color: 'bg-blue-100 text-blue-800' },
+        { value: 'perf', label: '⚡ Performance', color: 'bg-yellow-100 text-yellow-800' },
+        { value: 'docs', label: '📚 Documentation', color: 'bg-purple-100 text-purple-800' },
+        { value: 'test', label: '🧪 Testing', color: 'bg-indigo-100 text-indigo-800' },
+        { value: 'chore', label: '🔧 Chore', color: 'bg-gray-100 text-gray-800' }
+      ];
+
+      return (
+        <div className="grid grid-cols-3 gap-2">
+          {commitTypes.map((type) => (
+            <button
+              key={type.value}
+              onClick={() => onChange(type.value)}
+              className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                value === type.value 
+                  ? type.color + ' ring-2 ring-blue-500 ring-offset-1' 
+                  : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              {type.label}
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    function QualityScoreCard({ score, breakdown }) {
+      const getScoreColor = (score) => {
+        if (score >= 80) return 'text-green-600';
+        if (score >= 60) return 'text-yellow-600';
+        return 'text-red-600';
+      };
+
+      const getScoreIcon = (score) => {
+        if (score >= 80) return React.createElement(CheckCircle, { className: "w-5 h-5 text-green-500" });
+        if (score >= 60) return React.createElement(AlertCircle, { className: "w-5 h-5 text-yellow-500" });
+        return React.createElement(AlertCircle, { className: "w-5 h-5 text-red-500" });
+      };
+
+      const getBreakdownLabel = (key) => {
+        const labels = {
+          complexity: '복잡도',
+          maintainability: '유지보수성',
+          testability: '테스트 가능성',
+          security: '보안',
+          performance: '성능'
+        };
+        return labels[key] || key;
+      };
+
+      return (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900">품질 점수</h3>
+            {getScoreIcon(score)}
+          </div>
+          
+          <div className="text-center mb-6">
+            <div className={`text-4xl font-bold ${getScoreColor(score)}`}>
+              {score}
+            </div>
+            <div className="text-sm text-gray-500">/ 100</div>
+          </div>
+
+          {breakdown && (
+            <div className="space-y-3">
+              {Object.entries(breakdown).map(([key, value]) => (
+                <div key={key} className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">
+                    {getBreakdownLabel(key)}
+                  </span>
+                  <div className="flex items-center">
+                    <div className="w-20 bg-gray-200 rounded-full h-2 mr-2">
+                      <div 
+                        className={`h-2 rounded-full ${
+                          value >= 8 ? 'bg-green-500' : 
+                          value >= 6 ? 'bg-yellow-500' : 'bg-red-500'
+                        }`}
+                        style={{ width: `${value * 10}%` }}
+                      ></div>
+                    </div>
+                    <span className="text-sm font-medium">{value}/10</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function IntegratedReviewModal({ isOpen, onClose, analysisResult }) {
+      if (!isOpen) return null;
+
+      // by_commit_type에서 데이터 추출
+      const commitTypes = Object.keys(analysisResult.by_commit_type || {});
+      const summaryMarkdown = analysisResult.summary_review?.markdown || '';
+
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-6xl w-full max-h-[90vh] overflow-hidden">
+            {/* 모달 헤더 */}
+            <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-gray-900">🔍 통합 리뷰 체크</h2>
+              <button 
+                onClick={onClose}
+                className="text-gray-400 hover:text-gray-600 p-2"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* 모달 콘텐츠 */}
+            <div className="p-6 overflow-y-auto max-h-[70vh]">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* 왼쪽: 커밋 타입별 분석 */}
+                <div className="space-y-6">
+                  <h3 className="text-lg font-semibold text-gray-800 border-b pb-2">커밋 타입별 분석</h3>
+                  
+                  {commitTypes.map((type) => {
+                    const typeData = analysisResult.by_commit_type[type];
+                    const analysis = typeData.analysis;
+                    const guide = typeData.guide;
+
+                    return (
+                      <div key={type} className="border rounded-lg p-4">
+                        <h4 className="font-medium text-gray-700 mb-3">
+                          {type.toUpperCase()} - {guide.title}
+                        </h4>
+                        
+                        {/* 품질 점수 */}
+                        <div className="mb-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-gray-600">품질 점수</span>
+                            <span className={`text-lg font-bold ${
+                              analysis.quality_score >= 80 ? 'text-green-600' :
+                              analysis.quality_score >= 60 ? 'text-yellow-600' : 'text-red-600'
+                            }`}>
+                              {analysis.quality_score}/100
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* 요약 */}
+                        {analysis.summary && (
+                          <div className="mb-3">
+                            <h5 className="text-sm font-medium text-gray-600 mb-1">요약</h5>
+                            <p className="text-sm text-gray-700 bg-gray-50 p-2 rounded">
+                              {analysis.summary}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* 체크리스트 */}
+                        {guide.checklist && guide.checklist.length > 0 && (
+                          <div className="mb-3">
+                            <h5 className="text-sm font-medium text-gray-600 mb-1">체크리스트</h5>
+                            <ul className="space-y-1">
+                              {guide.checklist.slice(0, 3).map((item, index) => (
+                                <li key={index} className="flex items-start text-xs">
+                                  <input 
+                                    type="checkbox" 
+                                    className="mt-1 mr-2 rounded border-gray-300"
+                                  />
+                                  <span>{item}</span>
+                                </li>
+                              ))}
+                              {guide.checklist.length > 3 && (
+                                <li className="text-xs text-gray-500">
+                                  +{guide.checklist.length - 3}개 더...
+                                </li>
+                              )}
+                            </ul>
+                          </div>
+                        )}
+
+                        {/* 보안 및 성능 경고 */}
+                        {(analysis.security_concerns?.length > 0 || analysis.performance_impact?.length > 0) && (
+                          <div className="text-xs">
+                            {analysis.security_concerns?.length > 0 && (
+                              <div className="text-red-600 mb-1">
+                                🔒 보안 검토 필요: {analysis.security_concerns.length}건
+                              </div>
+                            )}
+                            {analysis.performance_impact?.length > 0 && (
+                              <div className="text-orange-600">
+                                ⚡ 성능 검토 필요: {analysis.performance_impact.length}건
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* 오른쪽: 통합 리뷰 마크다운 */}
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold text-gray-800 border-b pb-2">통합 리뷰 가이드</h3>
+                  
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <div 
+                      className="prose prose-sm max-w-none"
+                      dangerouslySetInnerHTML={{
+                        __html: summaryMarkdown
+                          .replace(/^# /gm, '<h1 class="text-lg font-bold mb-2">')
+                          .replace(/^## /gm, '<h2 class="text-md font-semibold mb-2 mt-4">')
+                          .replace(/^- \[ \] /gm, '<input type="checkbox" class="mr-2">- ')
+                          .replace(/^- /gm, '• ')
+                          .replace(/\n/g, '<br/>')
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 모달 푸터 */}
+            <div className="p-6 border-t border-gray-200 flex justify-end space-x-3">
+              <button
+                onClick={onClose}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+              >
+                닫기
+              </button>
+              <button
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"
+                onClick={() => alert('리뷰 완료되었습니다!')}
+              >
+                리뷰 완료
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // 메인 대시보드 컴포넌트
+    function AIReviewDashboard() {
+      const [repo, setRepo] = useState('');
+      const [prNumber, setPrNumber] = useState('');
+      const [commitType, setCommitType] = useState('feat');
+      const [isModalOpen, setIsModalOpen] = useState(false);
+
+      const aiReview = useAIReview();
+      const reviewGuide = useReviewGuide();
+      const healthCheck = useHealthCheck();
+
+      useEffect(() => {
+        healthCheck.checkHealth();
+      }, []);
+
+      const handleAnalyzePR = async () => {
+        if (!repo || !prNumber) {
+          alert('저장소와 PR 번호를 입력해주세요.');
+          return;
+        }
+
+        try {
+          await aiReview.analyzePR({
+            repo,
+            pr_number: parseInt(prNumber),
+            commit_type: commitType,
+            enable_split: true,
+            deep_analysis: false
+          });
+        } catch (error) {
+          console.error('PR 분석 실패:', error);
+        }
+      };
+
+      const handleGenerateGuide = async () => {
+        try {
+          await reviewGuide.generateReviewGuide(commitType, []);
+        } catch (error) {
+          console.error('리뷰 가이드 생성 실패:', error);
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-gray-50">
+          {/* 헤더 */}
+          <header className="bg-white shadow-sm border-b border-gray-200">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+              <div className="flex justify-between items-center h-16">
+                <div className="flex items-center">
+                  {React.createElement(Code, { className: "w-8 h-8 text-blue-600 mr-3" })}
+                  <h1 className="text-xl font-bold text-gray-900">AI Code Review</h1>
+                </div>
+                
+                <div className="flex items-center space-x-4">
+                  <div className="flex items-center space-x-2">
+                    <div className={`w-2 h-2 rounded-full ${
+                      healthCheck.status === 'healthy' ? 'bg-green-500' :
+                      healthCheck.status === 'unhealthy' ? 'bg-red-500' : 'bg-gray-400'
+                    }`}></div>
+                    <span className="text-sm text-gray-600">
+                      {healthCheck.status === 'healthy' ? 'Connected' :
+                       healthCheck.status === 'unhealthy' ? 'Disconnected' : 'Unknown'}
+                    </span>
+                  </div>
+
+                  <button
+                    onClick={healthCheck.checkHealth}
+                    className="p-2 text-gray-400 hover:text-gray-600"
+                    disabled={healthCheck.loading}
+                  >
+                    {React.createElement(RefreshCw, { 
+                      className: `w-5 h-5 ${healthCheck.loading ? 'animate-spin' : ''}` 
+                    })}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          {/* 메인 컨텐츠 */}
+          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <div className="space-y-8">
+              {/* PR 분석 입력 섹션 */}
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                  {React.createElement(GitPullRequest, { className: "w-5 h-5 text-blue-500 mr-2" })}
+                  PR 분석 요청
+                </h2>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      저장소 (owner/repo)
+                    </label>
+                    <input
+                      type="text"
+                      value={repo}
+                      onChange={(e) => setRepo(e.target.value)}
+                      placeholder="예: facebook/react"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      PR 번호
+                    </label>
+                    <input
+                      type="number"
+                      value={prNumber}
+                      onChange={(e) => setPrNumber(e.target.value)}
+                      placeholder="예: 123"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    커밋 타입
+                  </label>
+                  <CommitTypeSelector value={commitType} onChange={setCommitType} />
+                </div>
+
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    onClick={handleAnalyzePR}
+                    disabled={aiReview.loading}
+                    className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {aiReview.loading 
+                      ? React.createElement(Clock, { className: "w-4 h-4 mr-2 animate-spin" })
+                      : React.createElement(Search, { className: "w-4 h-4 mr-2" })
+                    }
+                    PR 분석
+                  </button>
+
+                  <button
+                    onClick={handleGenerateGuide}
+                    disabled={reviewGuide.loading}
+                    className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {reviewGuide.loading 
+                      ? React.createElement(Clock, { className: "w-4 h-4 mr-2 animate-spin" })
+                      : React.createElement(FileText, { className: "w-4 h-4 mr-2" })
+                    }
+                    리뷰 가이드 생성
+                  </button>
+
+                  {aiReview.data && (
+                    <button
+                      onClick={() => setIsModalOpen(true)}
+                      className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                    >
+                      {React.createElement(Eye, { className: "w-4 h-4 mr-2" })}
+                      통합 리뷰 체크
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* 에러 메시지 */}
+              {(aiReview.error || reviewGuide.error) && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                  <div className="flex items-center">
+                    {React.createElement(AlertCircle, { className: "w-5 h-5 text-red-500 mr-2" })}
+                    <span className="text-red-700">
+                      {aiReview.error || reviewGuide.error}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* 분석 결과 표시 */}
+              {aiReview.data && (
+                <div className="space-y-6">
+                  <h3 className="text-lg font-semibold text-gray-900">분석 결과</h3>
+                  
+                  {/* 커밋 타입별 요약 */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {Object.entries(aiReview.data.by_commit_type || {}).map(([type, data]) => (
+                      <div key={type} className="bg-white rounded-lg border border-gray-200 p-4">
+                        <h4 className="font-medium text-gray-900 mb-2">
+                          {type.toUpperCase()}
+                        </h4>
+                        <div className="text-sm text-gray-600 mb-2">
+                          품질 점수: 
+                          <span className={`ml-1 font-bold ${
+                            data.analysis.quality_score >= 80 ? 'text-green-600' :
+                            data.analysis.quality_score >= 60 ? 'text-yellow-600' : 'text-red-600'
+                          }`}>
+                            {data.analysis.quality_score}/100
+                          </span>
+                        </div>
+                        {data.analysis.summary && (
+                          <p className="text-sm text-gray-700 line-clamp-3">
+                            {data.analysis.summary}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* 통합 요약 */}
+                  {aiReview.data.summary_review?.markdown && (
+                    <div className="bg-white rounded-lg border border-gray-200 p-6">
+                      <h4 className="font-medium text-gray-900 mb-4">통합 리뷰 요약</h4>
+                      <div 
+                        className="prose prose-sm max-w-none"
+                        dangerouslySetInnerHTML={{
+                          __html: aiReview.data.summary_review.markdown
+                            .replace(/^# /gm, '<h1 class="text-lg font-bold mb-2">')
+                            .replace(/^## /gm, '<h2 class="text-md font-semibold mb-2 mt-4">')
+                            .replace(/^- \[ \] /gm, '<input type="checkbox" class="mr-2 mb-1">- ')
+                            .replace(/^- /gm, '• ')
+                            .split('\n').slice(0, 10).join('\n') + (aiReview.data.summary_review.markdown.split('\n').length > 10 ? '\n...' : '')
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </main>
+
+          {/* 통합 리뷰 모달 */}
+          {aiReview.data && (
+            <IntegratedReviewModal
+              isOpen={isModalOpen}
+              onClose={() => setIsModalOpen(false)}
+              analysisResult={aiReview.data}
+            />
+          )}
+        </div>
+      );
+    }
+
+    // 앱 렌더링 - React 18 createRoot API 사용
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<AIReviewDashboard />);
+  </script>
+</body>
+</html>
